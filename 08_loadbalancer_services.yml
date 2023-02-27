@@ -5,106 +5,118 @@
   vars_files:
     - vars/k8s_cluster.yml
   tasks:
-    - block:
-      - name: Manage packages on CentOS
-        block:
-        - name: Upgrade all packages
-          yum:
-            name: '*'
-            state: latest
+    - name: Manage packages
+      block:
+        - name: Manage packages on CentOS
+          block:
+            - name: Upgrade all packages
+              ansible.builtin.yum:
+                name: '*'
+                state: latest # noqa package-latest
+            - name: Install packages
+              ansible.builtin.yum:
+                name: "{{ packages }}"
+                state: present
+          when: k8s.cluster_os == 'CentOS'
 
-        - name: Install packages
-          yum:
-            name: "{{ packages }}"
-            state: latest
-        when: k8s.cluster_os == 'CentOS'
+        - name: Manage packages on Ubuntu
+          block:
+            - name: Upgrade all packages
+              ansible.builtin.apt:
+                name: '*'
+                state: latest # noqa package-latest
 
-      - name: Manage packages on Ubuntu
-        block:
-        - name: Upgrade all packages
-          apt:
-            name: '*'
-            state: latest
+            - name: Install packages
+              ansible.builtin.apt:
+                name: "{{ packages }}"
+                state: present
+          when: k8s.cluster_os == 'Ubuntu'
 
-        - name: Install packages
-          apt:
-            name: "{{ packages }}"
-            state: latest
-        when: k8s.cluster_os == 'Ubuntu'
+        - name: Ensure firewalld, haproxy and NM are enabled
+          ansible.builtin.service:
+            name: "{{ item }}"
+            enabled: true
+            state: started
+          loop:
+            - firewalld
+            - haproxy
+            - NetworkManager
 
-      - name: Ensure firewalld, haproxy and NM are enabled
-        service:
-          name: "{{ item }}"
-          enabled: true
-          state: started
-        loop:
-          - firewalld
-          - haproxy
-          - NetworkManager
+        - name: Firewall settings for Ubuntu
+          block:
+            - name: Stop NetworkManager
+              ansible.builtin.service:
+                name: NetworkManager
+                state: stopped
 
-#        # Workaround to fix firewalld zone not persisting after reboot: https://github.com/firewalld/firewalld/issues/195
-# 
-#      - name: Set interface to internal zone 
-#        shell: nmcli connection modify System\ eth0 connection.zone internal
-#        when: k8s.cluster_os == 'CentOS'
+            - name: Adding interface to firewall internal zone
+              ansible.posix.firewalld:
+                zone: internal
+                interface: "ens3"
+                permanent: true
+                state: enabled
 
-      - name: Stop NetworkManager
-        service: 
-          name: NetworkManager
-          state: stopped
+            - name: Start NetworkManager
+              ansible.builtin.service:
+                name: NetworkManager
+                state: started
+                enabled: true
+          when: k8s.cluster_os == 'Ubuntu'
 
-      - name: Adding interface to firewall internal zone  
-        ansible.posix.firewalld:
-          zone: internal
-          interface: "{{ 'eth0' if k8s.cluster_os == 'CentOS' else 'ens3' }}"
-          permanent: yes
-          state: enabled
+        - name: Firewall settings for CentOS
+          block:
+            - name: Adding interface to internal zone
+              ansible.builtin.command: nmcli con mod "System eth0" connection.zone internal
 
-      - name: Start NetworkManager
-        service:
-          name: NetworkManager
-          state: started
-          enabled: true
+            - name: Refreshing interface
+              ansible.builtin.shell: nmcli con down "System eth0"; nmcli con up "System eth0"
 
-      - name: Allow service for internal zone
-        ansible.posix.firewalld:
-          zone: internal
-          state: enabled
-          permanent: yes
-          service: "{{ item }}"
-        loop: "{{ services }}"
+            - name: Restart NetworkManager
+              ansible.builtin.service:
+                name: NetworkManager
+                state: restarted
+          when: k8s.cluster_os == 'CentOS'
 
-      - name: Allow ports for internal zone
-        ansible.posix.firewalld:
-          zone: internal
-          state: enabled
-          permanent: yes
-          port: "{{ item }}"
-        loop: "{{ internal_zone_port }}"
+        - name: Allow service for internal zone
+          ansible.posix.firewalld:
+            zone: internal
+            state: enabled
+            permanent: true
+            service: "{{ item }}"
+          loop: "{{ services }}"
 
-      - name: Reload firewalld service
-        service:
-          name: firewalld
-          state: restarted 
+        - name: Allow ports for internal zone
+          ansible.posix.firewalld:
+            zone: internal
+            state: enabled
+            permanent: true
+            port: "{{ item }}"
+          loop: "{{ internal_zone_port }}"
 
-      - name: Enabling selinux boolean for haproxy
-        seboolean:
-          name: haproxy_connect_any
-          state: yes
-          persistent: yes
-        when: k8s.cluster_os == 'CentOS'
+        - name: Reload firewalld service
+          ansible.builtin.service:
+            name: firewalld
+            state: restarted
 
-      - name: Firing haproxy template
-        template:
-          src: templates/haproxy.j2
-          dest: /etc/haproxy/haproxy.cfg
+        - name: Enabling selinux boolean for haproxy
+          ansible.posix.seboolean:
+            name: haproxy_connect_any
+            state: true
+            persistent: true
+          when: k8s.cluster_os == 'CentOS'
 
-      - name: Reload haproxy service
-        service:
-          name: haproxy
-          state: restarted
-          enabled: true
-      
-      - name: Reboot loadbalancer
-        reboot: 
+        - name: Firing haproxy template
+          ansible.builtin.template:
+            src: templates/haproxy.j2
+            dest: /etc/haproxy/haproxy.cfg
+            mode: 0755
+
+        - name: Reload haproxy service
+          ansible.builtin.service:
+            name: haproxy
+            state: restarted
+            enabled: true
+
+        - name: Reboot loadbalancer
+          ansible.builtin.reboot:
       when: k8s.control_plane.vms > 1 or (k8s.worker_nodes.vms > 1 and ingress_controller.install_ingress_controller)

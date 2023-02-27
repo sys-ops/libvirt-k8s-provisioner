@@ -6,7 +6,9 @@ variable "cpu" { default = 1 }
 variable "iface" { default = "ens3" }
 variable "libvirt_network" { default = "k8s" }
 variable "libvirt_pool" { default= "k8s" }
+variable "disk_size" { default = 25 }
 variable "os_image_name" { default= "CentOS-GenericCloud.qcow2" }
+variable "sshKey" { default = "" }
 
 provider "libvirt" {
   uri = "qemu:///system"
@@ -19,9 +21,16 @@ resource "libvirt_volume" "os_image" {
   format = "qcow2"
 }
 
+resource "libvirt_volume" "os_image_resized" {
+  name = "${var.hostname}-os_image_resized"
+  pool = var.libvirt_pool
+  base_volume_id = libvirt_volume.os_image.id
+  size           = var.disk_size*1073741824
+}
+
 resource "libvirt_cloudinit_disk" "commoninit" {
   name = "${var.hostname}-commoninit.iso"
-  pool = var.libvirt_pool 
+  pool = var.libvirt_pool
   user_data = data.template_file.user_data.rendered
 }
 
@@ -31,6 +40,7 @@ data "template_file" "user_data" {
     network_manager = var.os == "centos" ? "NetworkManager" : "network-manager"
     hostname = "${var.hostname}.${var.domain}"
     fqdn = "${var.hostname}.${var.domain}"
+    sshKey = var.sshKey
    }
 }
 
@@ -41,7 +51,7 @@ resource "libvirt_domain" "k8s-loadbalancer" {
   vcpu = var.cpu
 
   disk {
-     volume_id = libvirt_volume.os_image.id
+     volume_id = libvirt_volume.os_image_resized.id
   }
 
   network_interface {
@@ -68,7 +78,7 @@ terraform {
   required_providers {
     libvirt = {
       source  = "dmacvicar/libvirt"
-      version = "0.6.11"
+      version = "0.7.0"
     }
   }
 }

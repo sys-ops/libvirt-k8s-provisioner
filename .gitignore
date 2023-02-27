@@ -1,8 +1,11 @@
+clusters/
+*-inventory
+*-cleanup-playbook.yml
 *.default
 *.good
-id_rsa*
 terraform.tfstate*
 .terraform*
-admin.kubeconfig
-test.yml
-haproxy.cfg
+inventory-k8s
+context
+id_rsa*
+*.log

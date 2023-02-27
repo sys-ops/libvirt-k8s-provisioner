@@ -10,6 +10,7 @@ variable "libvirt_network" { default = "k8s" }
 variable "libvirt_pool" { default = "k8s" }
 variable "disk_size" { default = 20 }
 variable "os_image_name" { default = "CentOS-GenericCloud-worker.qcow2" }
+variable "sshKey" { default = "" }
 
 provider "libvirt" {
   uri = "qemu:///system"
@@ -42,7 +43,7 @@ resource "libvirt_volume" "rook_image" {
 resource "libvirt_cloudinit_disk" "commoninit" {
   count = var.vm_count
   name = "${var.hostname}-${count.index}-commoninit.iso"
-  pool = var.libvirt_pool 
+  pool = var.libvirt_pool
   user_data = data.template_file.user_data[count.index].rendered
 }
 
@@ -51,9 +52,9 @@ data "template_file" "user_data" {
   template = file("${path.module}/cloud_init.cfg")
   vars = {
     network_manager = var.os == "centos" ? "NetworkManager" : "network-manager"
-    nfs = var.os == "centos" ? "nfs-utils" : "nfs-common"
     hostname = "${var.hostname}-${count.index}.${var.domain}"
     fqdn = "${var.hostname}-${count.index}.${var.domain}"
+    sshKey = var.sshKey
    }
 }
 
@@ -96,7 +97,7 @@ terraform {
   required_providers {
     libvirt = {
       source  = "dmacvicar/libvirt"
-      version = "0.6.11"
+      version = "0.7.0"
     }
   }
 }

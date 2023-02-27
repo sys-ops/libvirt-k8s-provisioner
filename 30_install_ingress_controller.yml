@@ -1,4 +1,4 @@
---- 
+---
 - name: Prepare cluster to install ingress controller
   hosts: vm_host
   vars_files:
@@ -6,13 +6,13 @@
   run_once: true
   tasks:
     - name: Take all required steps to install contour as ingress controller
-      block:              
+      block:
         - name: Ensure the needed Namespaces exist.
           kubernetes.core.k8s:
             api_version: v1
             kind: Namespace
             name: projectcontour
-            kubeconfig: "clusters/{{ k8s.cluster_name }}/admin.kubeconfig"
+            kubeconfig: "{{ workspace_directory.base_path }}/clusters/{{ k8s.cluster_name }}/admin.kubeconfig"
             state: present
 
         - name: Add helm chart repository for Contour
@@ -27,8 +27,9 @@
           kubernetes.core.helm:
             name: contour
             chart_ref: "{{ ingress.contour.chart.ref }}"
-            kubeconfig: "clusters/{{ k8s.cluster_name }}/admin.kubeconfig"
+            kubeconfig: "{{ workspace_directory.base_path }}/clusters/{{ k8s.cluster_name }}/admin.kubeconfig"
             release_namespace: projectcontour
+            update_repo_cache: true
             values:
               contour:
                 ingressClass: ""
@@ -46,7 +47,7 @@
                     https: "{{ ingress_controller.node_port.https }}"
             wait: true
       when: ingress_controller.install_ingress_controller and ingress_controller.type == 'contour'
-       
+
     - name: Take all required steps to install haproxy as ingress controller
       block:
         - name: Ensure the needed Namespaces exist.
@@ -54,7 +55,7 @@
             api_version: v1
             kind: Namespace
             name: haproxy-controller
-            kubeconfig: "clusters/{{ k8s.cluster_name }}/admin.kubeconfig"
+            kubeconfig: "{{ workspace_directory.base_path }}/clusters/{{ k8s.cluster_name }}/admin.kubeconfig"
             state: present
 
         - name: Add helm chart repository for haproxy
@@ -69,7 +70,7 @@
           kubernetes.core.helm:
             name: haproxy
             chart_ref: "{{ ingress.haproxy.chart.ref }}"
-            kubeconfig: "clusters/{{ k8s.cluster_name }}/admin.kubeconfig"
+            kubeconfig: "{{ workspace_directory.base_path }}/clusters/{{ k8s.cluster_name }}/admin.kubeconfig"
             release_namespace: haproxy-controller
             values:
               controller:
@@ -80,9 +81,12 @@
                     http: "{{ ingress_controller.node_port.http }}"
                     https: "{{ ingress_controller.node_port.https }}"
                     stat: 31024
+                kind: Deployment
+                replicaCount: 1
+            update_repo_cache: true
             wait: true
       when: ingress_controller.install_ingress_controller and ingress_controller.type == 'haproxy'
-      
+
     - name: Take all required steps to install Nginx as ingress controller
       block:
         - name: Ensure the needed Namespaces exist.
@@ -95,9 +99,9 @@
                 labels:
                   app.kubernetes.io/name: ingress-nginx
                   app.kubernetes.io/instance: ingress-nginx
-            kubeconfig: "clusters/{{ k8s.cluster_name }}/admin.kubeconfig"
+            kubeconfig: "{{ workspace_directory.base_path }}/clusters/{{ k8s.cluster_name }}/admin.kubeconfig"
             state: present
-              
+
 
         - name: Add helm chart repository for Nginx
           kubernetes.core.helm_repository:
@@ -111,7 +115,7 @@
           kubernetes.core.helm:
             name: nginx
             chart_ref: "{{ ingress.nginx.chart.ref }}"
-            kubeconfig: "clusters/{{ k8s.cluster_name }}/admin.kubeconfig"
+            kubeconfig: "{{ workspace_directory.base_path }}/clusters/{{ k8s.cluster_name }}/admin.kubeconfig"
             release_namespace: ingress-nginx
             values:
               controller:
@@ -120,8 +124,9 @@
                   nodePorts:
                     http: "{{ ingress_controller.node_port.http }}"
                     https: "{{ ingress_controller.node_port.https }}"
+            update_repo_cache: true
             wait: true
-              
+
       when: ingress_controller.install_ingress_controller and ingress_controller.type == 'nginx'
 
 - name: Refresh facts
@@ -134,15 +139,17 @@
   become: true
   vars_files:
     - vars/k8s_cluster.yml
-  tasks: 
-    - block:
+  tasks:
+    - name: Configure HAProxy on Loadalancer
+      block:
         - name: Fire up new haproxy template
-          template:
+          ansible.builtin.template:
             src: templates/haproxy.j2
             dest: /etc/haproxy/haproxy.cfg
+            mode: 0755
 
         - name: Restart haproxy
-          systemd:
+          ansible.builtin.systemd:
             name: haproxy
             state: restarted
       when:
@@ -155,12 +162,13 @@
   vars_files:
     - vars/k8s_cluster.yml
   tasks:
-    - block:
+    - name: Save HAProxy configuration
+      block:
         - name: Fire up new haproxy template
-          template:
+          ansible.builtin.template:
             src: templates/haproxy.j2
-            dest: "clusters/{{ k8s.cluster_name }}/haproxy.cfg"
-      when: 
+            dest: "{{ workspace_directory.base_path }}/clusters/{{ k8s.cluster_name }}/haproxy.cfg"
+            mode: 0755
+      when:
         - ingress_controller.install_ingress_controller
         - k8s.control_plane.vms > 1 or k8s.worker_nodes.vms > 1
-
